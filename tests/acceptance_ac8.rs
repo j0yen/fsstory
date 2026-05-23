@@ -13,10 +13,45 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::doc_markdown)]
 
+use std::io::Write;
+use std::process::Command;
+use tempfile::tempdir;
+
 #[test]
 fn acceptance_ac8() {
-    // edit-agent: replace this stub with a real assertion. The
-    // panic keeps the test failing until you do, so the loop
-    // sees a real Stage 3 signal.
-    panic!("AC AC8 not yet implemented — see file header");
+    let bin = env!("CARGO_BIN_EXE_fsstory");
+    let cdir = tempdir().unwrap();
+    let jdir = tempdir().unwrap();
+    let nd = cdir.path().join("a.ndjson");
+    let mut f = std::fs::File::create(&nd).unwrap();
+    writeln!(
+        f,
+        r#"{{"ts":100,"syscall":"openat","flags":"WRONLY","file":"/tmp/stable","pid":1,"comm":"claude"}}"#
+    )
+    .unwrap();
+    writeln!(
+        f,
+        r#"{{"ts":200,"syscall":"openat","flags":"WRONLY","file":"/tmp/stable","pid":2,"comm":"nvim"}}"#
+    )
+    .unwrap();
+    let run = || -> Vec<u8> {
+        let out = Command::new(bin)
+            .arg("--ctrace-root")
+            .arg(cdir.path())
+            .arg("--claude-root")
+            .arg(jdir.path())
+            .arg("path")
+            .arg("/tmp/stable")
+            .arg("--since")
+            .arg("999999999s") // include all ts back to epoch
+            .arg("--format")
+            .arg("json")
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        out.stdout
+    };
+    let a = run();
+    let b = run();
+    assert_eq!(a, b, "JSON output not byte-identical across runs");
 }

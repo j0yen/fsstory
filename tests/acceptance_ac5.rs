@@ -13,10 +13,91 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::doc_markdown)]
 
+use std::collections::HashMap;
+use std::io::Write;
+use std::path::PathBuf;
+use std::time::SystemTime;
+use tempfile::tempdir;
+use walkdir::WalkDir;
+
+use fsstory::query::{Query, QueryEnv, run as run_query};
+
+fn snapshot(dir: &std::path::Path) -> HashMap<PathBuf, (u64, SystemTime)> {
+    let mut out = HashMap::new();
+    for e in WalkDir::new(dir).into_iter().filter_map(Result::ok) {
+        if e.file_type().is_file() {
+            let m = e.metadata().unwrap();
+            out.insert(
+                e.path().to_path_buf(),
+                (m.len(), m.modified().unwrap()),
+            );
+        }
+    }
+    out
+}
+
 #[test]
 fn acceptance_ac5() {
-    // edit-agent: replace this stub with a real assertion. The
-    // panic keeps the test failing until you do, so the loop
-    // sees a real Stage 3 signal.
-    panic!("AC AC5 not yet implemented — see file header");
+    let cdir = tempdir().unwrap();
+    let jdir = tempdir().unwrap();
+
+    // Populate both source dirs with realistic content.
+    let nd = cdir.path().join("a.ndjson");
+    let mut f = std::fs::File::create(&nd).unwrap();
+    writeln!(
+        f,
+        r#"{{"ts":100,"syscall":"openat","flags":"WRONLY","file":"/tmp/x","pid":1,"comm":"claude"}}"#
+    )
+    .unwrap();
+    let proj = jdir.path().join("p");
+    std::fs::create_dir_all(&proj).unwrap();
+    let jl = proj.join("s.jsonl");
+    let mut g = std::fs::File::create(&jl).unwrap();
+    writeln!(
+        g,
+        r#"{{"type":"assistant","timestamp":"1970-01-01T00:01:40Z","message":{{"content":[{{"type":"tool_use","name":"Edit","input":{{"file_path":"/tmp/x","old_string":"a","new_string":"b"}}}}]}}}}"#
+    )
+    .unwrap();
+
+    let snap_before_c = snapshot(cdir.path());
+    let snap_before_j = snapshot(jdir.path());
+
+    let env = QueryEnv {
+        ctrace_root: cdir.path().to_path_buf(),
+        claude_projects_root: jdir.path().to_path_buf(),
+    };
+
+    // Run every query type once.
+    let _ = run_query(
+        &env,
+        &Query::Path {
+            path: PathBuf::from("/tmp/x"),
+            since_secs: None,
+        },
+    );
+    let _ = run_query(
+        &env,
+        &Query::WhoWrote {
+            path: PathBuf::from("/tmp/x"),
+        },
+    );
+    let _ = run_query(
+        &env,
+        &Query::Summary {
+            root: PathBuf::from("/tmp"),
+            since_secs: None,
+        },
+    );
+
+    let snap_after_c = snapshot(cdir.path());
+    let snap_after_j = snapshot(jdir.path());
+
+    assert_eq!(
+        snap_before_c, snap_after_c,
+        "ctrace dir changed underneath fsstory"
+    );
+    assert_eq!(
+        snap_before_j, snap_after_j,
+        "claude_projects dir changed underneath fsstory"
+    );
 }

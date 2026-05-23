@@ -13,10 +13,62 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::doc_markdown)]
 
+use std::io::Write;
+use std::path::PathBuf;
+use std::process::Command;
+use tempfile::tempdir;
+
+use fsstory::query::{Query, QueryEnv, QueryOutput, run as run_query};
+
 #[test]
-fn acceptance_ac7() {
-    // edit-agent: replace this stub with a real assertion. The
-    // panic keeps the test failing until you do, so the loop
-    // sees a real Stage 3 signal.
-    panic!("AC AC7 not yet implemented — see file header");
+fn acceptance_ac7_library() {
+    let cdir = tempdir().unwrap();
+    let jdir = tempdir().unwrap();
+    let nd = cdir.path().join("a.ndjson");
+    let mut f = std::fs::File::create(&nd).unwrap();
+    // Two claude writes, one user-interactive write, one unknown.
+    writeln!(f, r#"{{"ts":100,"syscall":"openat","flags":"WRONLY","file":"/tmp/r/a","pid":1,"comm":"claude"}}"#).unwrap();
+    writeln!(f, r#"{{"ts":110,"syscall":"openat","flags":"WRONLY","file":"/tmp/r/b","pid":1,"comm":"claude"}}"#).unwrap();
+    writeln!(f, r#"{{"ts":120,"syscall":"openat","flags":"WRONLY","file":"/tmp/r/c","pid":2,"comm":"nvim"}}"#).unwrap();
+    writeln!(f, r#"{{"ts":130,"syscall":"openat","flags":"WRONLY","file":"/tmp/r/d","pid":3,"comm":"weird"}}"#).unwrap();
+
+    let env = QueryEnv {
+        ctrace_root: cdir.path().to_path_buf(),
+        claude_projects_root: jdir.path().to_path_buf(),
+    };
+    let q = Query::Summary {
+        root: PathBuf::from("/tmp/r"),
+        since_secs: None,
+    };
+    let QueryOutput::Summary { counts, total, .. } = run_query(&env, &q) else {
+        panic!("expected Summary");
+    };
+    assert_eq!(total, 4);
+    assert_eq!(counts.get("claude").copied(), Some(2));
+    assert_eq!(counts.get("user-interactive").copied(), Some(1));
+    assert_eq!(counts.get("unknown").copied(), Some(1));
+}
+
+#[test]
+fn acceptance_ac7_cli_subprocess() {
+    let bin = env!("CARGO_BIN_EXE_fsstory");
+    let cdir = tempdir().unwrap();
+    let jdir = tempdir().unwrap();
+    let real = tempdir().unwrap();
+    let output = Command::new(bin)
+        .arg("--ctrace-root")
+        .arg(cdir.path())
+        .arg("--claude-root")
+        .arg(jdir.path())
+        .arg("summary")
+        .arg("--root")
+        .arg(real.path())
+        .arg("--format")
+        .arg("json")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "fsstory summary failed: {output:?}");
+    let v: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(v.get("counts").is_some());
+    assert!(v.get("total").is_some());
 }

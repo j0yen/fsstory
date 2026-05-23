@@ -13,10 +13,50 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::doc_markdown)]
 
+use std::io::Write;
+use std::path::PathBuf;
+use tempfile::tempdir;
+
+use fsstory::query::{Query, QueryEnv, QueryOutput, run as run_query};
+
 #[test]
 fn acceptance_ac3() {
-    // edit-agent: replace this stub with a real assertion. The
-    // panic keeps the test failing until you do, so the loop
-    // sees a real Stage 3 signal.
-    panic!("AC AC3 not yet implemented — see file header");
+    let cdir = tempdir().unwrap();
+    let jdir = tempdir().unwrap();
+
+    // Create a real file on disk for stat() to find.
+    let file_dir = tempdir().unwrap();
+    let target = file_dir.path().join("config.toml");
+    let mut f = std::fs::File::create(&target).unwrap();
+    writeln!(f, "key = 'value'").unwrap();
+
+    // ctrace root EXISTS but is empty (simulates "ctrace was off this whole window").
+    // jsonl root EXISTS but is empty.
+    let env = QueryEnv {
+        ctrace_root: cdir.path().to_path_buf(),
+        claude_projects_root: jdir.path().to_path_buf(),
+    };
+    let q = Query::Path {
+        path: target.clone(),
+        since_secs: None,
+    };
+    let out = run_query(&env, &q);
+    let QueryOutput::PathEvents { events, .. } = out else {
+        panic!("expected PathEvents");
+    };
+    assert_eq!(events.len(), 1, "expected one stat-fallback event");
+    assert_eq!(events[0].confidence, fsstory::Confidence::Low);
+
+    // Also test that a totally non-existent ctrace_root doesn't blow up.
+    let bogus = PathBuf::from("/nonexistent/ctrace");
+    let env2 = QueryEnv {
+        ctrace_root: bogus,
+        claude_projects_root: jdir.path().to_path_buf(),
+    };
+    let out2 = run_query(&env2, &q);
+    let QueryOutput::PathEvents { events: ev2, .. } = out2 else {
+        panic!("expected PathEvents");
+    };
+    assert_eq!(ev2.len(), 1);
+    assert_eq!(ev2[0].confidence, fsstory::Confidence::Low);
 }

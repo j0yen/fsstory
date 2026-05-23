@@ -13,10 +13,51 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::doc_markdown)]
 
+use std::io::Write;
+use std::path::PathBuf;
+use tempfile::tempdir;
+
+use fsstory::query::{Query, QueryEnv, QueryOutput, render_path_json, run as run_query};
+
 #[test]
 fn acceptance_ac1() {
-    // edit-agent: replace this stub with a real assertion. The
-    // panic keeps the test failing until you do, so the loop
-    // sees a real Stage 3 signal.
-    panic!("AC AC1 not yet implemented — see file header");
+    // Build a minimal env with a ctrace ndjson recording a write to /tmp/x.
+    let cdir = tempdir().unwrap();
+    let jdir = tempdir().unwrap();
+    let nd = cdir.path().join("a.ndjson");
+    let mut f = std::fs::File::create(&nd).unwrap();
+    writeln!(
+        f,
+        r#"{{"ts":100,"syscall":"openat","flags":"WRONLY|CREAT","file":"/tmp/x","pid":1,"comm":"claude"}}"#
+    )
+    .unwrap();
+
+    let env = QueryEnv {
+        ctrace_root: cdir.path().to_path_buf(),
+        claude_projects_root: jdir.path().to_path_buf(),
+    };
+    let q = Query::Path {
+        path: PathBuf::from("/tmp/x"),
+        since_secs: None,
+    };
+    let out = run_query(&env, &q);
+    let QueryOutput::PathEvents { path, events } = out else {
+        panic!("expected PathEvents");
+    };
+    assert_eq!(path, PathBuf::from("/tmp/x"));
+    assert!(!events.is_empty(), "expected at least one event");
+
+    // Round-trip the rendered JSON and check the documented shape.
+    let s = render_path_json(&path, &events).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+    assert_eq!(v["path"], "/tmp/x");
+    let arr = v["events"].as_array().expect("events must be an array");
+    assert!(!arr.is_empty());
+    for ev in arr {
+        // PRD §4.3: each event has ts, actor, op, confidence.
+        assert!(ev.get("ts").is_some(), "missing ts: {ev}");
+        assert!(ev.get("actor").is_some(), "missing actor: {ev}");
+        assert!(ev.get("op").is_some(), "missing op: {ev}");
+        assert!(ev.get("confidence").is_some(), "missing confidence: {ev}");
+    }
 }

@@ -13,10 +13,74 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::doc_markdown)]
 
+use std::io::Write;
+use std::path::PathBuf;
+use std::process::Command;
+use tempfile::tempdir;
+
+use fsstory::query::{Query, QueryEnv, QueryOutput, render_who_wrote, run as run_query};
+
 #[test]
-fn acceptance_ac4() {
-    // edit-agent: replace this stub with a real assertion. The
-    // panic keeps the test failing until you do, so the loop
-    // sees a real Stage 3 signal.
-    panic!("AC AC4 not yet implemented — see file header");
+fn acceptance_ac4_via_library() {
+    let cdir = tempdir().unwrap();
+    let jdir = tempdir().unwrap();
+
+    // Two ctrace events on /tmp/z; the later one must win.
+    let nd = cdir.path().join("a.ndjson");
+    let mut f = std::fs::File::create(&nd).unwrap();
+    writeln!(
+        f,
+        r#"{{"ts":100,"syscall":"openat","flags":"WRONLY","file":"/tmp/z","pid":1,"comm":"claude"}}"#
+    )
+    .unwrap();
+    writeln!(
+        f,
+        r#"{{"ts":500,"syscall":"openat","flags":"WRONLY","file":"/tmp/z","pid":1,"comm":"nvim"}}"#
+    )
+    .unwrap();
+
+    let env = QueryEnv {
+        ctrace_root: cdir.path().to_path_buf(),
+        claude_projects_root: jdir.path().to_path_buf(),
+    };
+    let q = Query::WhoWrote {
+        path: PathBuf::from("/tmp/z"),
+    };
+    let out = run_query(&env, &q);
+    let QueryOutput::Latest { latest, .. } = out else {
+        panic!("expected Latest");
+    };
+    let line = render_who_wrote(latest.as_ref());
+    let cols: Vec<&str> = line.split('\t').collect();
+    assert_eq!(cols.len(), 3, "expected 3 tab-separated columns, got: {line}");
+    assert!(cols[1].starts_with("user-interactive:"), "actor was {}", cols[1]);
+}
+
+#[test]
+fn acceptance_ac4_exits_zero() {
+    // The CLI subprocess form: `fsstory who-wrote <path>` must exit 0
+    // and produce exactly one line of output.
+    let bin = env!("CARGO_BIN_EXE_fsstory");
+    let cdir = tempdir().unwrap();
+    let jdir = tempdir().unwrap();
+    let real = tempdir().unwrap();
+    let f = real.path().join("file.txt");
+    std::fs::write(&f, "hi").unwrap();
+
+    let output = Command::new(bin)
+        .arg("--ctrace-root")
+        .arg(cdir.path())
+        .arg("--claude-root")
+        .arg(jdir.path())
+        .arg("who-wrote")
+        .arg(&f)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "fsstory exited non-zero: {output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    // Exactly one newline-terminated line.
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 1, "expected one line, got: {stdout:?}");
+    let cols: Vec<&str> = lines[0].split('\t').collect();
+    assert_eq!(cols.len(), 3, "expected 3 columns in: {}", lines[0]);
 }

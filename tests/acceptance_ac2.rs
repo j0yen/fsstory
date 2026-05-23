@@ -13,10 +13,63 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::doc_markdown)]
 
+use std::io::Write;
+use std::path::PathBuf;
+use tempfile::tempdir;
+
+use fsstory::query::{Query, QueryEnv, QueryOutput, run as run_query};
+
 #[test]
 fn acceptance_ac2() {
-    // edit-agent: replace this stub with a real assertion. The
-    // panic keeps the test failing until you do, so the loop
-    // sees a real Stage 3 signal.
-    panic!("AC AC2 not yet implemented — see file header");
+    let cdir = tempdir().unwrap();
+    let jdir = tempdir().unwrap();
+
+    // ctrace: write to /tmp/y at ts=100 by comm=claude.
+    let nd = cdir.path().join("trace.ndjson");
+    let mut f = std::fs::File::create(&nd).unwrap();
+    writeln!(
+        f,
+        r#"{{"ts":100,"syscall":"openat","flags":"WRONLY|CREAT","file":"/tmp/y","pid":42,"comm":"claude"}}"#
+    )
+    .unwrap();
+
+    // jsonl: Edit tool_use on /tmp/y at iso=ts=100, turn 5.
+    // 100 seconds after epoch is 1970-01-01T00:01:40Z.
+    let proj = jdir.path().join("project-a");
+    std::fs::create_dir_all(&proj).unwrap();
+    let jl = proj.join("sess-abc.jsonl");
+    let mut g = std::fs::File::create(&jl).unwrap();
+    // Pad with 5 non-tool_use lines so the Edit lands at turn 5.
+    for _ in 0..5 {
+        writeln!(g, r#"{{"type":"user","timestamp":"1970-01-01T00:01:40Z","message":{{"content":[]}}}}"#).unwrap();
+    }
+    writeln!(
+        g,
+        r#"{{"type":"assistant","timestamp":"1970-01-01T00:01:40Z","message":{{"content":[{{"type":"tool_use","name":"Edit","input":{{"file_path":"/tmp/y","old_string":"a","new_string":"b"}}}}]}}}}"#
+    )
+    .unwrap();
+
+    let env = QueryEnv {
+        ctrace_root: cdir.path().to_path_buf(),
+        claude_projects_root: jdir.path().to_path_buf(),
+    };
+    let q = Query::Path {
+        path: PathBuf::from("/tmp/y"),
+        since_secs: None,
+    };
+    let out = run_query(&env, &q);
+    let QueryOutput::PathEvents { events, .. } = out else {
+        panic!("expected PathEvents");
+    };
+    assert!(!events.is_empty(), "expected an event for /tmp/y");
+    let high = events
+        .iter()
+        .find(|e| e.confidence == fsstory::Confidence::High)
+        .expect("expected at least one high-confidence event");
+    let label = high.actor.to_label();
+    assert!(
+        label.starts_with("claude-session:sess-abc.jsonl:"),
+        "actor label was {label}"
+    );
+    assert!(label.ends_with(":5"), "expected turn 5 in {label}");
 }

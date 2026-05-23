@@ -13,10 +13,45 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::doc_markdown)]
 
+use std::io::Write;
+use std::path::PathBuf;
+use tempfile::tempdir;
+
+use fsstory::query::{Query, QueryEnv, QueryOutput, run as run_query};
+
 #[test]
 fn acceptance_ac6() {
-    // edit-agent: replace this stub with a real assertion. The
-    // panic keeps the test failing until you do, so the loop
-    // sees a real Stage 3 signal.
-    panic!("AC AC6 not yet implemented — see file header");
+    let cdir = tempdir().unwrap();
+    let jdir = tempdir().unwrap();
+    let nd = cdir.path().join("trace.ndjson");
+    let mut f = std::fs::File::create(&nd).unwrap();
+    for comm in &["nvim", "vim", "code", "zed", "helix"] {
+        writeln!(
+            f,
+            r#"{{"ts":100,"syscall":"openat","flags":"WRONLY","file":"/tmp/{comm}-target","pid":99,"comm":"{comm}"}}"#
+        )
+        .unwrap();
+    }
+
+    let env = QueryEnv {
+        ctrace_root: cdir.path().to_path_buf(),
+        claude_projects_root: jdir.path().to_path_buf(),
+    };
+    for comm in &["nvim", "vim", "code", "zed", "helix"] {
+        let q = Query::Path {
+            path: PathBuf::from(format!("/tmp/{comm}-target")),
+            since_secs: None,
+        };
+        let QueryOutput::PathEvents { events, .. } = run_query(&env, &q) else {
+            panic!("expected PathEvents");
+        };
+        assert!(!events.is_empty(), "no events for comm={comm}");
+        let ev = &events[0];
+        assert_eq!(ev.confidence, fsstory::Confidence::Medium);
+        let label = ev.actor.to_label();
+        assert!(
+            label.starts_with("user-interactive:"),
+            "expected user-interactive, got {label}"
+        );
+    }
 }
