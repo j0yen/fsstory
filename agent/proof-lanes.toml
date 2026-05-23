@@ -41,6 +41,18 @@ required_commands = [
 ]
 
 [[lane]]
+id = "docs"
+description = "Project-root markdown (PRD-*.md, README.md). Routed so vti-plan accepts these as legitimate, with no cargo gate needed."
+globs = ["PRD-*.md", "README.md"]
+required_commands = []
+
+[[lane]]
+id = "agent-config"
+description = "agent/* metadata (intent-card.json, proof-lanes.toml, owner-map.json, test-map.json, AUTOBUILDER_PROGRAM.md). Routed so vti-plan accepts intent-card amendments and proof-lanes evolution without a cargo gate."
+globs = ["agent/**"]
+required_commands = []
+
+[[lane]]
 id = "harness-readonly"
 description = "Harness files; should never change after scaffold"
 globs = [
