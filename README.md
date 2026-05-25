@@ -2,6 +2,24 @@
 
 > When a file on this laptop changes, the user (Joe) needs to know who changed it (claude-session vs user-interactive vs package-manager vs unknown), when, and with what confidence, so trust calibration and forensics stop requiring three Bash invocations and guesswork.
 
+## Install
+
+### One-liner
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/j0yen/fsstory/main/install.sh | bash
+```
+
+### Manual
+
+```sh
+git clone --depth 1 https://github.com/j0yen/fsstory.git
+cd fsstory
+./install.sh
+```
+
+Installs the `fsstory` binary via `cargo install --path . --locked`. Requires `cargo` / `rustc 1.85+` and `git`. Built binary lands in `~/.cargo/bin/`.
+
 ## Why
 
 When a file on this laptop changes, the user (Joe) needs to know who changed it (claude-session vs user-interactive vs package-manager vs unknown), when, and with what confidence, so trust calibration and forensics stop requiring three Bash invocations and guesswork. The chain underneath this surface request: stat+mtime answer 'when' but not 'who/why'; ctrace knows PID+comm of writes; Claude session JSONLs know which turn/tool ran; fsstory is the read-only joiner over those sources that produces an attributed per-path timeline.
