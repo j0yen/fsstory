@@ -1,68 +1,73 @@
 # fsstory
 
-> When a file on this laptop changes, the user (Joe) needs to know who changed it (claude-session vs user-interactive vs package-manager vs unknown), when, and with what confidence, so trust calibration and forensics stop requiring three Bash invocations and guesswork.
+`fsstory` answers a question `stat` can't: when a file on this laptop changed, *who* changed it — a Claude session, an interactive editor, or something unattributed — when, and with what confidence. Read-only, snapshot on demand.
+
+## Why it exists
+
+`stat` tells you a file's mtime. It does not tell you who wrote it. On a laptop where Claude sessions edit files all day alongside your own work, "when did this change" is the easy half of the question; "who, and why" is the half that matters for trust and forensics — and answering it usually means three `Bash` invocations and a guess.
+
+The information exists, just scattered. ctrace knows the PID and `comm` of each write. Claude session transcripts know which turn and which tool ran. `stat` knows the mtime. `fsstory` is the read-only joiner over those sources: it produces one attributed timeline per path, so the answer is a single command instead of a reconstruction.
 
 ## Install
-
-### One-liner
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/j0yen/fsstory/main/install.sh | bash
 ```
 
-### Manual
+Or build it yourself — requires `cargo` and `rustc 1.85+`:
 
 ```sh
 git clone --depth 1 https://github.com/j0yen/fsstory.git
 cd fsstory
-./install.sh
+./install.sh        # cargo install --path . --locked → ~/.cargo/bin/fsstory
 ```
 
-Installs the `fsstory` binary via `cargo install --path . --locked`. Requires `cargo` / `rustc 1.85+` and `git`. Built binary lands in `~/.cargo/bin/`.
-
-## Why
-
-When a file on this laptop changes, the user (Joe) needs to know who changed it (claude-session vs user-interactive vs package-manager vs unknown), when, and with what confidence, so trust calibration and forensics stop requiring three Bash invocations and guesswork. The chain underneath this surface request: stat+mtime answer 'when' but not 'who/why'; ctrace knows PID+comm of writes; Claude session JSONLs know which turn/tool ran; fsstory is the read-only joiner over those sources that produces an attributed per-path timeline.
-
-## Build
+## Quickstart
 
 ```sh
-cargo build --release
+# Full attributed timeline for one path (JSON by default)
+fsstory path src/main.rs --since 24h
+
+# Just the latest event — one tab-separated line: <ts>\t<actor>\t<confidence>
+fsstory who-wrote src/main.rs
+
+# By-actor histogram under a directory
+fsstory summary --root . --since 7d
 ```
 
-Produces `target/release/fsstory`. Symlink into `~/.local/bin/` if you want it on `$PATH`.
+Each event carries a timestamp, an actor, an operation, and a confidence. When ctrace data isn't available, `fsstory` still answers from `stat` mtime plus path heuristics, marks the events `confidence: low`, and exits 0 — it degrades, it doesn't error.
 
-## Usage
+## Actors
 
-```sh
-fsstory --help
-```
+The attribution it can assign:
 
-## Audience
+| Actor | Meaning |
+|---|---|
+| `claude-session:<jsonl>:<turn>` | A specific Claude tool-use (Edit / Write / NotebookEdit / MCP). |
+| `claude-bash:<jsonl>:<turn>` | A side-effect of a Bash tool-use, not a specific edit. |
+| `user-interactive:<comm>` | An interactive editor (vim, nvim, code, zed, helix) with no Claude ancestor. |
+| `unknown[:<comm>]` | Couldn't attribute; carries the writer's `comm` if ctrace saw one. |
 
-Joe Yen, a single user on one Arch Linux laptop, running Claude Code sessions throughout the day. Consumes fsstory both directly via CLI and indirectly via /self-review Phase A. No multi-user, no remote hosts, no real-time stream — snapshot-on-demand queries only.
+## Sources
 
-## Acceptance criteria
+Three, joined per query: ctrace write logs (`~/.cache/ctrace/sessions`, overridable with `--ctrace-root`), Claude session transcripts (`~/.claude/projects`, overridable with `--projects-root`), and `stat` mtime. Pacman and journald are deliberately out of scope.
 
-This project was scaffolded from a PRD via the `autobuilder` pipeline. The MUST-level acceptance criteria are:
+## Read-only by contract
 
-- **AC1**: `fsstory path <path>` emits a JSON object with `path` and `events[]`, where each event has `ts`, `actor`, `op`, and `confidence` fields. Schema is stable enough that a test can parse it.
-- **AC2**: Given a synthetic ctrace ndjson log containing a write event on `<path>` from `comm=claude` and a matching Claude session JSONL with an Edit tool_use on the same `<path>` in the same time window, `fsstory path <path>` attributes that eve...
-- **AC3**: When no ctrace log is available (graceful degradation), `fsstory path <path>` still emits an event list derived from stat mtime + path heuristics, with `confidence: low`, and exits 0. It never errors solely because ctrace was off.
-- **AC4**: `fsstory who-wrote <path>` exits 0 and emits exactly one line: the latest attributed event for `<path>` formatted as `<ts>\t<actor>\t<confidence>`.
-- **AC5**: Read-only invariant: across the full test suite, fsstory does not write to or modify any file under the source directories it ingests (ctrace logs, Claude project JSONLs, pacman log). Verified by a tempdir fixture + per-file mtime/size s...
+`fsstory` never writes to or modifies any file it ingests. The invariant is verified in the test suite by snapshotting mtime and size of every fixture file across a full run.
 
-Each AC has a matching integration test under `tests/acceptance_ac<n>.rs`.
+## Where it fits
+
+A single-user tool for one laptop — no multi-user, no remote hosts, no real-time stream. Used directly from the CLI, and indirectly by `/self-review` Phase A for trust calibration.
+
+## Status
+
+The three subcommands (`path`, `who-wrote`, `summary`), the four-actor attribution, and graceful ctrace-absent degradation are complete and covered by integration tests, one per acceptance criterion under `tests/`.
 
 ## Provenance
 
-Built via the [`autobuilder`](https://github.com/j0yen/autobuilder) pipeline (PRD intake -> intent-card -> scaffold -> iterate-and-prove). Originally consolidated as a subdir of the [`wintermute`](https://github.com/j0yen/wintermute) monorepo; this standalone repo is a fresh-init snapshot for easier consumption and distribution.
+Built via the [`autobuilder`](https://github.com/j0yen/autobuilder) pipeline (PRD → intent-card → scaffold → iterate-and-prove). Originally a subdir of the [`wintermute`](https://github.com/j0yen/wintermute) monorepo; this is a fresh-init standalone snapshot.
 
 ## License
 
-Licensed under either of:
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
-- MIT license ([LICENSE-MIT](LICENSE-MIT))
-
-at your option.
+Apache-2.0 OR MIT, at your option ([LICENSE-APACHE](LICENSE-APACHE), [LICENSE-MIT](LICENSE-MIT)).
